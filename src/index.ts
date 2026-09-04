@@ -23,7 +23,7 @@ import {
 	type PromptCapture,
 } from "./prompt-capture.js";
 import { collectCarriedAttachments, placeCarriedAttachments, type CarriedAttachment } from "./attachments.js";
-import { createToolServer } from "./mcp-server.js";
+import { createToolServer, type McpToolDef } from "./mcp-server.js";
 import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
 import { askClaudeCallTags, askClaudeToolDescription, buildAskClaudeParams, resolveAskClaudeDefaults, resolveAskClaudeMode, type AskClaudeMode } from "./askclaude-schema.js";
 import { nonSystemMessages, toBridgeContext } from "./transcript.js";
@@ -1089,8 +1089,7 @@ function resolveMcpTools(context: Context, excludeToolName?: string): {
 // it, and a handler that runs first parks its resolver in `pendingToolCalls`.
 // Handlers close over the captured `queryCtx`, ensuring they operate on the
 // correct query's state while multiple queries run concurrently.
-function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, ReturnType<typeof createToolServer>> | undefined {
-	if (!tools.length) return undefined;
+function makeMcpTools(tools: Tool[], queryCtx: QueryContext): McpToolDef[] {
 	const mcpTools = tools.map((tool) => ({
 		name: tool.name,
 		description: tool.description,
@@ -1108,10 +1107,20 @@ function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, 
 			});
 		},
 	}));
-	return { [MCP_SERVER_NAME]: createToolServer(MCP_SERVER_NAME, mcpTools) };
+	return mcpTools;
+}
+
+function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, ReturnType<typeof createToolServer>> | undefined {
+	if (!tools.length) return undefined;
+	return { [MCP_SERVER_NAME]: createToolServer(MCP_SERVER_NAME, makeMcpTools(tools, queryCtx)) };
 }
 
 // --- Usage helpers ---
+
+const mcpToolServers = new WeakMap<QueryContext, {
+	server: ReturnType<typeof createToolServer>;
+	toolNames: Map<string, string>;
+}>();
 
 // The counter mapping lives in usage.ts; the debug line is this side's job, so every
 // call site logs the same way rather than three times over.
@@ -1770,7 +1779,20 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		// Delivery is async because the steer must reach CC's stdin *before* the
 		// tool result does — see deliverToolResults. Detached so the provider
 		// still returns its stream synchronously.
-		void deliverToolResults(resultCtx, allResults, steer, context.messages.length);
+		void (async () => {
+			const toolServer = mcpToolServers.get(resultCtx);
+			if (toolServer) {
+				try {
+					const refreshedTools = resolveMcpTools(context, askClaudeToolName);
+					await toolServer.server.updateTools(makeMcpTools(refreshedTools.mcpTools, resultCtx));
+					toolServer.toolNames.clear();
+					for (const [sdkName, piName] of refreshedTools.customToolNameToPi) toolServer.toolNames.set(sdkName, piName);
+				} catch (error) {
+					debug("provider: MCP tool refresh failed:", error);
+				}
+			}
+			await deliverToolResults(resultCtx, allResults, steer, context.messages.length);
+		})();
 		// The shared cursor tracks the top-level conversation. A reentrant subagent
 		// delivering its own results would drag it to that subagent's message count
 		// — observed pulling a parent from 5 back to 3, which cost the parent's next
@@ -1929,6 +1951,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		.catch((error) => debug(`provider: initial prompt push rejected:`, error));
 	queryCtx.promptStream = promptStream;
 	const mcpServers = buildMcpServers(mcpTools, queryCtx);
+	const mcpToolServer = mcpServers?.[MCP_SERVER_NAME];
+	if (mcpToolServer) mcpToolServers.set(queryCtx, { server: mcpToolServer, toolNames: customToolNameToPi });
 
 	// MCP auto-loading suppression: CC reads MCP servers from ~/.claude.json (top-level
 	// + per-project) and .mcp.json. Since pi executes tools (not CC), those are pure

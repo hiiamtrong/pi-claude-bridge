@@ -989,9 +989,7 @@ function showStartupNoticeOnce(): void {
 }
 
 // Captures of what pi assembled per agent; see src/prompt-capture.ts for why this
-// is keyed rather than held in a single slot. One process-wide instance, shared
-// across every extension module instance: isolated subagents re-evaluate this
-// module, and the pinned stream they all route through resolves against it.
+// is keyed rather than held in a single slot and shared process-wide.
 const promptCaptures = sharedPromptCaptures((diagnostic) => {
 	const first = diagnostic.matches[0];
 	debug(

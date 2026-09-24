@@ -65,10 +65,13 @@ export class PromptCaptures {
 	 *  Set well above any plausible working set because the costs are lopsided: a
 	 *  capture is tens of KB, while evicting one that is still live fails the turn.
 	 *  A parent that fans out to more distinct sub-agent prompts than this before its
-	 *  own next turn would be evicted despite being in use. The bound exists only to
-	 *  cap an extension that rebuilds the prompt every turn, which would otherwise
-	 *  grow keys without limit. */
-	constructor(private readonly limit = 256, onDiagnose?: (diagnostic: PromptCaptureDiagnostic) => void) {
+	 *  own next turn would be evicted despite being in use. Raised from 256 to 1024
+	 *  after a long orchestration-heavy session (many sequential/parallel sub-agent
+	 *  launches, each with a different skill/context/cwd combination, so each is its
+	 *  own capture key) exhausted 256 and made every later sub-agent turn throw. The
+	 *  bound still exists only to cap an extension that rebuilds the prompt every
+	 *  turn, which would otherwise grow keys without limit. */
+	constructor(private readonly limit = 1024, onDiagnose?: (diagnostic: PromptCaptureDiagnostic) => void) {
 		this.onDiagnose = onDiagnose ?? (() => {});
 	}
 
@@ -282,7 +285,7 @@ const SHARED_CAPTURES_KEY = Symbol.for("claude-bridge:promptCaptures");
  *  keys carry identical portable parts, so cross-session reuse is safe. */
 export function sharedPromptCaptures(onDiagnose?: (diagnostic: PromptCaptureDiagnostic) => void): PromptCaptures {
 	const globals = globalThis as Record<symbol, PromptCaptures | undefined>;
-	return (globals[SHARED_CAPTURES_KEY] ??= new PromptCaptures(256, onDiagnose));
+	return (globals[SHARED_CAPTURES_KEY] ??= new PromptCaptures(1024, onDiagnose));
 }
 
 export function projectPromptCapture(

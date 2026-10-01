@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyLongContext, buildModels, claudeCodeModelId, resolveClaudeCodeRuntimeModel, resolveModel } from "../src/models.js";
+import { applyLongContext, buildModels, claudeCodeModelId, mergeCatalogOverlay, resolveClaudeCodeRuntimeModel, resolveModel } from "../src/models.js";
 import { getModels } from "@earendil-works/pi-ai/compat";
 
 const PRO = { plan: "pro", longContextExtraUsage: false };
@@ -74,6 +74,34 @@ describe("MODELS projection", () => {
 	it("forwards undefined thinkingLevelMap unchanged (no fabricated defaults)", () => {
 		const models = buildModels([mockPiAiModel("claude-haiku-4-5")]);
 		assert.equal(find(models, "claude-haiku-4-5")?.thinkingLevelMap, undefined);
+	});
+});
+
+describe("mergeCatalogOverlay", () => {
+	it("adds pi.dev catalog models the bundled catalog lacks", () => {
+		const merged = mergeCatalogOverlay(
+			[mockPiAiModel("claude-sonnet-5")],
+			{ "claude-sonnet-5-5": oneM("claude-sonnet-5-5") },
+		);
+		assert.deepEqual(merged.map((m) => m.id), ["claude-sonnet-5", "claude-sonnet-5-5"]);
+	});
+
+	it("keeps the bundled entry when both catalogs have the id", () => {
+		const bundled = mockPiAiModel("claude-sonnet-5");
+		const merged = mergeCatalogOverlay([bundled], { "claude-sonnet-5": oneM("claude-sonnet-5") });
+		assert.deepEqual(merged, [bundled]);
+	});
+
+	it("ignores a missing or malformed catalog", () => {
+		const bundled = [mockPiAiModel("claude-sonnet-5")];
+		for (const catalog of [undefined, null, "x", 1, [oneM("claude-sonnet-5-5")], {}]) {
+			assert.deepEqual(mergeCatalogOverlay(bundled, catalog), bundled);
+		}
+	});
+
+	it("skips catalog entries without a string id", () => {
+		const merged = mergeCatalogOverlay([], { a: { name: "x" }, b: null, c: oneM("claude-sonnet-5-5") });
+		assert.deepEqual(merged.map((m) => m.id), ["claude-sonnet-5-5"]);
 	});
 });
 

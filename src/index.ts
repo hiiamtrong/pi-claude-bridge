@@ -1,15 +1,15 @@
 import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream, type Context, type ImageContent, type Model, type SimpleStreamOptions, type TextContent, type Tool, type UserMessage } from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
-import { buildSessionContext, compact, generateBranchSummary, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, compact, generateBranchSummary, getAgentDir, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Text } from "@earendil-works/pi-tui";
 import { createSession, deleteSession, openSession, repairToolPairing } from "cc-session-io";
-import { appendFileSync, mkdirSync, realpathSync, statSync } from "fs";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { PROVIDER_ID, messageContentToText, convertPiMessages } from "./convert.js";
 import { DEBUG_LOG_PATH, DIAG_LOG_PATH } from "./log-paths.js";
-import { applyLongContext, buildModels, claudeCodeModelId, type LongContextSettings, resolveModel as _resolveModel } from "./models.js";
+import { applyLongContext, buildModels, claudeCodeModelId, mergeCatalogOverlay, type LongContextSettings, resolveModel as _resolveModel } from "./models.js";
 import { MCP_SERVER_NAME, MCP_TOOL_PREFIX, renderSkillsBlock } from "./skills.js";
 import { verifyWrittenSession as _verifyWrittenSession } from "./session-verify.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
@@ -140,8 +140,38 @@ const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
 	read: "read", write: "write", edit: "edit", bash: "bash",
 };
 
-// MODELS is buildModels(getModels("anthropic")) — projection kept in models.js.
-const MODELS = buildModels(getModels("anthropic"));
+// pi only refreshes its own pi.dev catalog for providers holding a credential,
+// and bridge users usually have no anthropic one — so the bridge caches the
+// public catalog itself. Models registered at load come from the cache; a
+// refresh fetched this run shows up in /model after the next start.
+const CATALOG_URL = "https://pi.dev/api/models/providers/anthropic";
+const CATALOG_REFRESH_MS = 4 * 60 * 60 * 1000; // pi's own remote-catalog interval
+const catalogCachePath = () => join(getAgentDir(), "claude-bridge-models.json");
+
+function readCatalogCache(): unknown {
+	try {
+		return JSON.parse(readFileSync(catalogCachePath(), "utf-8"));
+	} catch {
+		return undefined; // No cache yet (first run) or unreadable: bundled catalog only.
+	}
+}
+
+async function refreshCatalogCache(): Promise<void> {
+	if (process.env.PI_OFFLINE !== undefined) return; // pi's own offline switch
+	const path = catalogCachePath();
+	try {
+		if (Date.now() - statSync(path).mtimeMs < CATALOG_REFRESH_MS) return;
+	} catch {} // No cache yet: fetch.
+	const res = await fetch(CATALOG_URL, { signal: AbortSignal.timeout(10_000) });
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	const body = await res.text();
+	JSON.parse(body); // Never cache a body we could not read back.
+	writeFileSync(path, body);
+}
+
+// MODELS is buildModels(getModels("anthropic")) plus the cached pi.dev catalog
+// — projection kept in models.js.
+const MODELS = buildModels(mergeCatalogOverlay(getModels("anthropic"), readCatalogCache()));
 let providerSettings: NonNullable<Config["provider"]> = {};
 let longContextSettings: LongContextSettings = { plan: "pro", longContextExtraUsage: false };
 
@@ -2393,6 +2423,7 @@ export default function (pi: ExtensionAPI) {
 		forceTwoHundredK,
 	};
 	const registeredModels = applyLongContext(MODELS, longContextSettings);
+	refreshCatalogCache().catch((err) => debug(`catalog refresh failed: ${errorMessage(err)}`));
 	if (registeredModels.length === 0) {
 		console.error("claude-bridge: no models available from pi-ai's anthropic catalog — update @earendil-works/pi-ai (requires >=0.86.1)");
 	}

@@ -29,6 +29,16 @@ function versionRank(id: string): { family: string; tuple: [number, number] } {
 	return { family, tuple: [Number(major) || 0, Number(minor) || 0] };
 }
 
+// pi.dev's anthropic catalog (an id-keyed object) gets new models before a
+// pi-ai release bundles them. Append those ids; the bundled entry wins when
+// both catalogs have one.
+export function mergeCatalogOverlay<T extends { id: string }>(bundled: T[], catalog: unknown): T[] {
+	if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return bundled;
+	const known = new Set(bundled.map((m) => m.id));
+	const added = Object.values(catalog).filter((m): m is T => typeof m?.id === "string" && !known.has(m.id));
+	return [...bundled, ...added];
+}
+
 export function buildModels<T extends { id: string; [key: string]: any }>(piAiModels: T[]) {
 	return piAiModels
 		.filter((m) => typeof m.id === "string" && !isDatedAlias(m.id))

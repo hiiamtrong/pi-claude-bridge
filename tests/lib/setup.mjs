@@ -18,3 +18,7 @@ import { join } from "node:path";
 const logDir = mkdtempSync(join(tmpdir(), "claude-bridge-test-log-"));
 process.env.CLAUDE_BRIDGE_DEBUG_PATH = join(logDir, "claude-bridge.log");
 process.on("exit", () => rmSync(logDir, { recursive: true, force: true }));
+
+// Activation refreshes the pi.dev model catalog into ~/.pi/agent; keep the
+// suite off the network and out of the real agent dir.
+process.env.PI_OFFLINE = "1";

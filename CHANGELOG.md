@@ -1,5 +1,9 @@
 # Changelog
 
+## UNRELEASED
+
+- **New: pi.dev catalog overlay** — The bridge caches pi.dev's Anthropic model catalog and adds models pi-ai does not bundle yet, so new models reach `/model` without waiting for a pi-ai release. pi itself only refreshes that catalog for providers with a credential.
+
 ## 0.9.1 — 2026-09-30
 
 - **Bump: Claude Sonnet 5.5 and pi-ai 0.99.1** — pi-ai update brings `claude-sonnet-5-5` with 1M context. Agent SDK now requires `^0.3.284`.
